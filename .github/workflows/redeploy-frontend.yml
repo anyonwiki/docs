@@ -1,0 +1,66 @@
+# Rebuild the website whenever the documentation changes.
+#
+# The frontend compiles these MDX files at build time (its `prebuild` step
+# clones this repository), so a fresh deployment is the only way for an edit
+# here to reach the live site. This asks Railway to build and deploy the
+# frontend service from its latest commit.
+#
+# Requirements (repo Settings -> Secrets and variables -> Actions):
+#   RAILWAY_TOKEN           - a Railway *project token* for the production
+#                             environment (Project -> Settings -> Tokens).
+#   RAILWAY_PROJECT_ID      - from the project URL or Settings -> General.
+#   RAILWAY_ENVIRONMENT_ID  - the production environment's id.
+#   RAILWAY_SERVICE_ID      - the frontend service's id.
+#
+# `environmentTriggersDeploy` starts a new build. `deploymentRedeploy` would
+# reuse the existing deployment and never pick up the new docs.
+
+name: Redeploy frontend
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "content/**"
+  workflow_dispatch:
+
+concurrency:
+  group: redeploy-frontend
+  cancel-in-progress: true
+
+jobs:
+  redeploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger a fresh frontend build on Railway
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
+          ENVIRONMENT_ID: ${{ secrets.RAILWAY_ENVIRONMENT_ID }}
+          SERVICE_ID: ${{ secrets.RAILWAY_SERVICE_ID }}
+        run: |
+          for v in RAILWAY_TOKEN PROJECT_ID ENVIRONMENT_ID SERVICE_ID; do
+            if [ -z "${!v}" ]; then
+              echo "::error::$v is not set"
+              exit 1
+            fi
+          done
+
+          payload=$(jq -n \
+            --arg p "$PROJECT_ID" --arg e "$ENVIRONMENT_ID" --arg s "$SERVICE_ID" \
+            '{
+              query: "mutation Deploy($input: EnvironmentTriggersDeployInput!) { environmentTriggersDeploy(input: $input) }",
+              variables: { input: { projectId: $p, environmentId: $e, serviceId: $s } }
+            }')
+
+          response=$(curl -sS https://backboard.railway.com/graphql/v2 \
+            -H "Content-Type: application/json" \
+            -H "Project-Access-Token: $RAILWAY_TOKEN" \
+            -d "$payload")
+
+          echo "$response"
+          if echo "$response" | jq -e '.errors' > /dev/null; then
+            echo "::error::Railway rejected the deploy request"
+            exit 1
+          fi
+          echo "Frontend build triggered."
