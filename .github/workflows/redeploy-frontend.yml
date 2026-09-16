@@ -2,18 +2,18 @@
 #
 # The frontend compiles these MDX files at build time (its `prebuild` step
 # clones this repository), so a fresh deployment is the only way for an edit
-# here to reach the live site. This asks Railway to build and deploy the
-# frontend service from its latest commit.
+# here to reach the live site. This asks Railway to rebuild and redeploy the
+# frontend service.
 #
 # Requirements (repo Settings -> Secrets and variables -> Actions):
 #   RAILWAY_TOKEN           - a Railway *project token* for the production
-#                             environment (Project -> Settings -> Tokens).
-#   RAILWAY_PROJECT_ID      - from the project URL or Settings -> General.
-#   RAILWAY_ENVIRONMENT_ID  - the production environment's id.
-#   RAILWAY_SERVICE_ID      - the frontend service's id.
+#                             environment (Railway: Project -> Settings -> Tokens).
+#   RAILWAY_ENVIRONMENT_ID  - from the service URL: ...?environmentId=<this>
+#   RAILWAY_SERVICE_ID      - from the service URL: /service/<this>
 #
-# `environmentTriggersDeploy` starts a new build. `deploymentRedeploy` would
-# reuse the existing deployment and never pick up the new docs.
+# `serviceInstanceRedeploy` rebuilds from the service's current commit and is
+# permitted for project tokens. `environmentTriggersDeploy` is not (it returns
+# "Bad Access"), and a restart would not rebuild at all.
 
 name: Redeploy frontend
 
@@ -32,14 +32,13 @@ jobs:
   redeploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger a fresh frontend build on Railway
+      - name: Rebuild and redeploy the frontend on Railway
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-          PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
           ENVIRONMENT_ID: ${{ secrets.RAILWAY_ENVIRONMENT_ID }}
           SERVICE_ID: ${{ secrets.RAILWAY_SERVICE_ID }}
         run: |
-          for v in RAILWAY_TOKEN PROJECT_ID ENVIRONMENT_ID SERVICE_ID; do
+          for v in RAILWAY_TOKEN ENVIRONMENT_ID SERVICE_ID; do
             if [ -z "${!v}" ]; then
               echo "::error::$v is not set"
               exit 1
@@ -47,10 +46,10 @@ jobs:
           done
 
           payload=$(jq -n \
-            --arg p "$PROJECT_ID" --arg e "$ENVIRONMENT_ID" --arg s "$SERVICE_ID" \
+            --arg e "$ENVIRONMENT_ID" --arg s "$SERVICE_ID" \
             '{
-              query: "mutation Deploy($input: EnvironmentTriggersDeployInput!) { environmentTriggersDeploy(input: $input) }",
-              variables: { input: { projectId: $p, environmentId: $e, serviceId: $s } }
+              query: "mutation Redeploy($e: String!, $s: String!) { serviceInstanceRedeploy(environmentId: $e, serviceId: $s) }",
+              variables: { e: $e, s: $s }
             }')
 
           response=$(curl -sS https://backboard.railway.com/graphql/v2 \
@@ -63,4 +62,4 @@ jobs:
             echo "::error::Railway rejected the deploy request"
             exit 1
           fi
-          echo "Frontend build triggered."
+          echo "Frontend rebuild triggered."
